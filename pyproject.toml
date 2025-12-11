@@ -1,0 +1,20 @@
+[project]
+name = "bomkit"
+version = "0.1.0"
+description = "Open-source toolkit for parsing and normalizing Bills of Materials"
+authors = [{name="Ethan Rozee", email="ethanrozee01@gmail.com"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+dependencies = [
+    "openpyxl",
+    "chardet"
+]
+
+[project.scripts]
+bomkit = "bomkit.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/erozee1/bomkit"
+"Documentation" = "coming soon"
+"Bug Tracker" = "https://github.com/erozee1/bomkit/issues"

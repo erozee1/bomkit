@@ -110,6 +110,12 @@ class BomNormalizer:
             elif value is None:
                 normalized_row[key] = ""
         
+        # Normalize reference designator ranges
+        if normalized_row.get("reference_designator"):
+            normalized_row["reference_designator"] = self.normalize_reference_designator(
+                normalized_row["reference_designator"]
+            )
+        
         return normalized_row
     
     def normalize(self, raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -122,6 +128,135 @@ class BomNormalizer:
             List of dictionaries with standard column names
         """
         return [self.normalize_row(row) for row in raw_rows]
+    
+    def normalize_reference_designator(self, ref_des: str) -> str:
+        """Normalize reference designator string to consistent format with ranges.
+        
+        Handles:
+        - Comma-separated lists: "R1, R2, R3" -> "R1-R3"
+        - Already formatted ranges: "R1-R3" -> "R1-R3" (unchanged)
+        - Mixed ranges and singles: "R1-R3, R5, R7-R9" -> "R1-R3, R5, R7-R9"
+        - Non-consecutive: "C1, C2, C4" -> "C1, C2, C4" or "C1-C2, C4"
+        
+        Args:
+            ref_des: Reference designator string (e.g., "R1, R2, R3" or "D1-D8")
+            
+        Returns:
+            Normalized reference designator string with consistent range formatting
+        """
+        if not ref_des or not ref_des.strip():
+            return ""
+        
+        # Clean up the input
+        ref_des = ref_des.strip()
+        
+        # Remove trailing commas and clean up whitespace
+        ref_des = re.sub(r',\s*$', '', ref_des)  # Remove trailing comma
+        ref_des = re.sub(r'\s*,\s*', ', ', ref_des)  # Normalize comma spacing
+        
+        # Split by comma to get individual designators
+        parts = [p.strip() for p in ref_des.split(',') if p.strip()]
+        
+        if not parts:
+            return ""
+        
+        # Parse designators into (prefix, number) tuples or keep unparseable as strings
+        parseable_designators = []  # List of (prefix, number) tuples
+        unparseable = []  # List of strings that couldn't be parsed
+        
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            # Check if it's already a range (e.g., "R1-R5")
+            if '-' in part and not part.startswith('-'):
+                range_parts = part.split('-', 1)
+                if len(range_parts) == 2:
+                    start = range_parts[0].strip()
+                    end = range_parts[1].strip()
+                    # Parse both ends
+                    start_match = re.match(r'^([A-Za-z]+)(\d+)$', start)
+                    end_match = re.match(r'^([A-Za-z]+)(\d+)$', end)
+                    if start_match and end_match:
+                        start_prefix, start_num = start_match.groups()
+                        end_prefix, end_num = end_match.groups()
+                        if start_prefix == end_prefix:
+                            # Expand the range
+                            for num in range(int(start_num), int(end_num) + 1):
+                                parseable_designators.append((start_prefix, num))
+                        else:
+                            # Different prefixes, treat as separate
+                            parseable_designators.append((start_prefix, int(start_num)))
+                            parseable_designators.append((end_prefix, int(end_num)))
+                    else:
+                        # Can't parse, keep as-is
+                        unparseable.append(part)
+                continue
+            
+            # Parse individual designator (e.g., "R1", "C42")
+            match = re.match(r'^([A-Za-z]+)(\d+)$', part)
+            if match:
+                prefix, number = match.groups()
+                parseable_designators.append((prefix, int(number)))
+            else:
+                # Can't parse, keep as-is
+                unparseable.append(part)
+        
+        if not parseable_designators and not unparseable:
+            return ref_des  # Return original if we can't parse anything
+        
+        # Group by prefix and sort
+        grouped = {}
+        
+        for prefix, num in parseable_designators:
+            if prefix not in grouped:
+                grouped[prefix] = []
+            grouped[prefix].append(num)
+        
+        # Sort numbers for each prefix
+        for prefix in grouped:
+            grouped[prefix].sort()
+        
+        # Build normalized output
+        result_parts = []
+        
+        # Process each prefix group
+        for prefix in sorted(grouped.keys()):
+            numbers = grouped[prefix]
+            if not numbers:
+                continue
+            
+            # Find consecutive ranges
+            ranges = []
+            start = numbers[0]
+            end = numbers[0]
+            
+            for i in range(1, len(numbers)):
+                if numbers[i] == end + 1:
+                    # Consecutive, extend range
+                    end = numbers[i]
+                else:
+                    # Gap found, save current range
+                    if start == end:
+                        ranges.append(f"{prefix}{start}")
+                    else:
+                        ranges.append(f"{prefix}{start}-{prefix}{end}")
+                    start = numbers[i]
+                    end = numbers[i]
+            
+            # Add final range
+            if start == end:
+                ranges.append(f"{prefix}{start}")
+            else:
+                ranges.append(f"{prefix}{start}-{prefix}{end}")
+            
+            result_parts.extend(ranges)
+        
+        # Add unparseable items
+        result_parts.extend(unparseable)
+        
+        return ', '.join(result_parts)
     
     def get_mapping_report(self, raw_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Generate a report of column mappings for debugging.

@@ -9,17 +9,35 @@ import openpyxl
 
 
 class BomParser:
-    """Parser for Bill of Materials files with normalization support."""
+    """Parser for Bill of Materials files with comprehensive normalization support.
     
-    def __init__(self, normalize: bool = True, normalize_units: bool = True):
-        """Initialize the BOM parser.
+    This parser integrates multiple normalization features:
+    1. Column name normalization (standard headers)
+    2. Lexical similarity matching (handles typos, abbreviations, variations)
+    3. Column profiling (disambiguates ambiguous columns using data patterns)
+    4. Unit normalization (converts to SI engineering units)
+    """
+    
+    def __init__(self, normalize: bool = True, normalize_units: bool = True,
+                 use_lexical_similarity: bool = True, similarity_threshold: float = 0.6,
+                 use_column_profiling: bool = True, profile_similarity_threshold: float = 0.7):
+        """Initialize the BOM parser with all normalization features.
         
         Args:
             normalize: If True, normalize rows to standard template (default: True)
             normalize_units: If True, normalize units to SI engineering units (default: True)
+            use_lexical_similarity: If True, use lexical similarity for column matching (default: True)
+            similarity_threshold: Minimum similarity score for lexical matching (default: 0.6)
+            use_column_profiling: If True, use column profiling for ambiguous columns (default: True)
+            profile_similarity_threshold: Minimum profile similarity score (default: 0.7)
         """
         self.adapters = []
-        self.normalizer = BomNormalizer() if normalize else None
+        self.normalizer = BomNormalizer(
+            use_lexical_similarity=use_lexical_similarity,
+            similarity_threshold=similarity_threshold,
+            use_column_profiling=use_column_profiling,
+            profile_similarity_threshold=profile_similarity_threshold
+        ) if normalize else None
         self.unit_normalizer = UnitNormalizer() if normalize_units else None
     
     def register_adapter(self, adapter):
@@ -64,7 +82,11 @@ class BomParser:
         # Normalize columns if requested
         should_normalize = normalize if normalize is not None else (self.normalizer is not None)
         if should_normalize and self.normalizer:
-            normalized_rows = self.normalizer.normalize(raw_rows)
+            # Use profiling-based normalization if enabled, otherwise use standard normalization
+            if self.normalizer.use_column_profiling and self.normalizer.column_profiler:
+                normalized_rows = self.normalizer.normalize_with_profiling(raw_rows)
+            else:
+                normalized_rows = self.normalizer.normalize(raw_rows)
         else:
             normalized_rows = raw_rows
         
@@ -223,6 +245,45 @@ class BomParser:
         
         # Export to output file
         return self.export(data, output_path, format=format)
+    
+    def normalize_complete(self, input_path: str, output_path: Optional[str] = None,
+                          format: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Complete normalization pipeline: parse, normalize, and optionally export.
+        
+        This is the main method to turn a messy BOM into a perfect one. It uses:
+        1. File parsing (CSV, Excel, PDF adapters)
+        2. Column name normalization with lexical similarity
+        3. Column profiling for ambiguous columns
+        4. Unit normalization to SI engineering units
+        5. Reference designator normalization
+        6. Optional export to standardized format
+        
+        Args:
+            input_path: Path to the input BOM file
+            output_path: Optional path to export normalized BOM (if None, only returns data)
+            format: Output format ('csv', 'excel', 'json', or None for auto-detect from extension)
+            
+        Returns:
+            List of dictionaries representing normalized BOM rows with standard column names
+            
+        Example:
+            >>> parser = BomParser()
+            >>> parser.register_adapter(CsvAdapter())
+            >>> parser.register_adapter(ExcelAdapter())
+            >>> normalized_bom = parser.normalize_complete('messy_bom.csv', 'clean_bom.xlsx')
+        """
+        # Parse and normalize using all features
+        normalized_data = self.parse(
+            input_path,
+            normalize=True,  # Always normalize
+            normalize_units=True  # Always normalize units
+        )
+        
+        # Export if output path provided
+        if output_path:
+            self.export(normalized_data, output_path, format=format)
+        
+        return normalized_data
     
     def normalize_units(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Normalize units in BOM data to SI engineering units.

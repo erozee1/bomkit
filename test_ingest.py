@@ -54,7 +54,7 @@ def test_ingest_bom3():
     parser = BomParser(normalize=True)
     parser.register_adapter(CsvAdapter())
     
-    bom_file = project_root / "tests" / "BOM-4.csv"
+    bom_file = project_root / "tests" / "pcb-bom.csv"
     if not bom_file.exists():
         print(f"❌ Error: {bom_file} not found")
         return

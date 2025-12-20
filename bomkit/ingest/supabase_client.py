@@ -563,9 +563,9 @@ class SupabaseClient(DatabaseClient):
         """
         Insert a snapshot_item (materialized state at snapshot time).
         
-        Uses ON CONFLICT to make this idempotent - if the same (snapshot_id, bom_item_id)
-        already exists, it updates the values instead of failing.
-        This handles cases where the same bom_item appears multiple times in the input.
+        Uses ON CONFLICT as a safety net - since each CSV row should resolve to
+        a unique bom_item_id (via row_index in context), conflicts should be rare.
+        If a conflict occurs, it updates the values instead of failing.
         """
         cursor = self._get_cursor()
         

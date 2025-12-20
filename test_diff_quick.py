@@ -142,8 +142,8 @@ def main():
     """Test diff with the two snapshots from test_ingest."""
     
     # Snapshot IDs from your test runs
-    snapshot_a_id = UUID("b9da5ea3-abcb-4c92-bc65-af4afde77c63")  # BOM-3 (13 rows)
-    snapshot_b_id = UUID("65a3806b-c509-4e5a-a093-e3b961b32f7d")  # BOM-4 (12 rows)
+    snapshot_a_id = UUID("d72174e2-30e8-4c68-a7ae-4b62c31ffd11")  # BOM-3 (13 rows)
+    snapshot_b_id = UUID("41b173ff-6a92-452c-86b1-21cf485345e7")  # BOM-4 (12 rows)
     
     print("=" * 60)
     print("Testing Snapshot Diff")

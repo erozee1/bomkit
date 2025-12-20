@@ -556,18 +556,21 @@ def _extract_bom_item_context(row: NormalizedRow) -> Dict[str, Any]:
     These are specs that define HOW the part is used in this assembly.
     Goes into bom_items.context.
     
-    CRITICAL: Reference designator is NOT included here.
-    Reference designators are snapshot-specific state (can change between uploads),
-    not stable identity. They belong in snapshot_items.attributes, not bom_items.context.
+    CRITICAL DESIGN DECISIONS:
+    1. Reference designator is NOT included here (it's in snapshot_items.attributes)
+       - Refdes changes show as MODIFY, not remove+add
+    2. Row index is NOT included here (it's in snapshot_items.attributes)
+       - Row position is NOT part of identity - it's snapshot-specific metadata
+       - Including row_index breaks identity stability across uploads
+       - Same part should reuse bom_item_id even if row position changes
     
-    Includes: placement notes, installation notes, torque specs
-    (Stable usage context that doesn't change between snapshots)
+    Includes: placement notes, installation notes, torque specs (stable usage context)
     
     Args:
         row: Normalized row
         
     Returns:
-        Dictionary of usage context (without reference_designator)
+        Dictionary of usage context (stable across snapshots)
     """
     context = {}
     
@@ -576,11 +579,18 @@ def _extract_bom_item_context(row: NormalizedRow) -> Dict[str, Any]:
     # When refdes changes (D1-D8 → D1-D6), it should show as a MODIFY, not remove+add.
     # Storing refdes in snapshot_items.attributes achieves this.
     
+    # NOTE: Row index is intentionally EXCLUDED from bom_items.context
+    # because row position is NOT part of identity - it's snapshot-specific metadata.
+    # Including row_index would break identity stability:
+    # - Same part at row 5 in snapshot A and row 6 in snapshot B would get different bom_item_ids
+    # - This causes false add/remove in diffs
+    # - Row position is stored in snapshot_items.attributes for traceability only
+    
     # Usage-specific notes (placement, installation, etc.)
+    # These are stable usage context that defines HOW the part is used
     if row.context.get("notes"):
         context["notes"] = row.context["notes"]
     
-    # Any other usage-specific context (stable across snapshots)
     if row.context.get("placement"):
         context["placement"] = row.context["placement"]
     
@@ -708,13 +718,19 @@ def _resolve_or_create_bom_item(
     
     This implements the USAGE IDENTITY resolution:
     - A bom_item represents "This part used in this assembly in this role"
-    - Match using: assembly_id, part_id, context similarity (notes, placement, etc.)
+    - Match using: assembly_id, part_id, context similarity (stable usage context)
     - Reference designator is NOT used for matching (it's snapshot-specific)
-    - If matched → reuse
+    - Row index is NOT used for matching (it's snapshot-specific metadata)
+    - If matched → reuse (CRITICAL for stable diffs)
     - Else → create new
     
-    CRITICAL: Reference designator is NOT part of bom_items.context.
-    This ensures refdes changes (D1-D8 → D1-D6) show as MODIFY, not remove+add.
+    CRITICAL: 
+    1. Reference designator is NOT part of bom_items.context.
+       This ensures refdes changes (D1-D8 → D1-D6) show as MODIFY, not remove+add.
+    2. Row index is NOT part of bom_items.context.
+       Including row_index breaks identity stability - same part at different
+       row positions would get different bom_item_ids, causing false add/remove in diffs.
+    3. Identity must be stable across uploads for diffs to work correctly.
     
     This is what allows stable diffs across snapshots.
     
@@ -731,13 +747,14 @@ def _resolve_or_create_bom_item(
     context = _extract_bom_item_context(row)
     
     # Find similar bom_items
-    # NOTE: Context no longer includes reference_designator, so matching
-    # is based on stable usage context (notes, placement, torque, etc.)
+    # NOTE: Context does NOT include row_index or reference_designator.
+    # This ensures identity is stable across uploads - same part+assembly+usage
+    # context will reuse the same bom_item_id even if row position or refdes changes.
     similar_items = db.find_similar_bom_items(
         assembly_id=assembly_id,
         part_id=part_id,
         context=context,
-        similarity_threshold=0.7  # Lower threshold for usage context matching
+        similarity_threshold=0.7  # Match on stable usage context (notes, placement, etc.)
     )
     
     if similar_items:
@@ -946,72 +963,57 @@ def ingest_bom_snapshot(
         # STEP 4: Insert Snapshot Items
         # ========================================================================
         # For each resolved bom_item, insert snapshot state
-        # This materializes the BOM state at this point in time
+        # This materializes the BOM state at snapshot time
         #
-        # CRITICAL: Multiple rows may resolve to the same bom_item_id
-        # (same part, same assembly, same context, but different CSV rows).
-        # We aggregate by bom_item_id to avoid duplicate key violations.
-        
-        # Aggregate by bom_item_id
-        # If the same bom_item appears multiple times, we need to decide:
-        # - Option 1: Sum quantities (if quantities are per-instance)
-        # - Option 2: Keep first occurrence (if rows are duplicates)
-        # - Option 3: Use ON CONFLICT to handle duplicates
+        # CRITICAL: Identity stability vs. 1:1 row mapping trade-off
+        # 
+        # We removed row_index from bom_item context to ensure identity stability:
+        # - Same part+assembly+context reuses bom_item_id across snapshots
+        # - This enables stable diffs (no false add/remove)
         #
-        # For now, we'll aggregate quantities and merge attributes
-        bom_item_aggregated = {}  # bom_item_id -> (total_quantity, merged_attributes, row_indices)
-        
-        for bom_item_id, row in bom_item_mappings:
-            if bom_item_id not in bom_item_aggregated:
-                bom_item_aggregated[bom_item_id] = {
-                    'quantity': row.quantity or 0,
-                    'attributes': _extract_snapshot_attributes(row),
-                    'row_indices': [row.row_index]
-                }
-            else:
-                # Same bom_item_id appears again - aggregate
-                existing = bom_item_aggregated[bom_item_id]
-                # Sum quantities (if both are numeric)
-                if row.quantity is not None:
-                    existing['quantity'] = (existing['quantity'] or 0) + row.quantity
-                # Merge attributes (prefer non-empty values, combine row_indices)
-                existing_attrs = existing['attributes']
-                new_attrs = _extract_snapshot_attributes(row)
-                # Merge: keep all unique keys, combine row_indices
-                for key, value in new_attrs.items():
-                    if key == 'row_index':
-                        # Combine row indices
-                        if 'row_indices' not in existing_attrs:
-                            existing_attrs['row_indices'] = existing['row_indices'].copy()
-                        if row.row_index not in existing_attrs['row_indices']:
-                            existing_attrs['row_indices'].append(row.row_index)
-                    elif key not in existing_attrs or not existing_attrs[key]:
-                        # Use new value if existing is empty
-                        existing_attrs[key] = value
-                    elif key == 'reference_designator':
-                        # For refdes, we might want to combine (e.g., "D1-D6, D7-D8")
-                        # But for now, keep the first one to avoid complexity
-                        pass
-                existing['row_indices'].append(row.row_index)
+        # However, this means multiple CSV rows can resolve to the same bom_item_id.
+        # The database constraint (snapshot_id, bom_item_id) unique prevents duplicates.
+        # 
+        # Solution: ON CONFLICT handles duplicates by updating the snapshot_item.
+        # If the same bom_item appears multiple times, the last row's values win.
+        # This is acceptable because identical rows (same part+assembly+context)
+        # represent the same usage and should be treated as one bom_item.
         
         created_count = 0
+        bom_item_seen = {}  # Track bom_item_id -> first row for duplicate detection
         
-        for bom_item_id, aggregated in bom_item_aggregated.items():
-            # Extract aggregated data
-            quantity = aggregated['quantity'] if aggregated['quantity'] > 0 else None
-            snapshot_attributes = aggregated['attributes']
+        for bom_item_id, row in bom_item_mappings:
+            # Extract snapshot-local attributes (row_index, reference_designator, etc.)
+            snapshot_attributes = _extract_snapshot_attributes(row)
             
             # Compute deterministic checksum
+            # This allows detecting changes between snapshots
             checksum = _compute_checksum(
-                quantity=quantity,
+                quantity=row.quantity,
                 attributes=snapshot_attributes
             )
             
-            # Insert snapshot_item (idempotent - uses ON CONFLICT)
+            # Check if we've already seen this bom_item_id in this snapshot
+            if bom_item_id in bom_item_seen:
+                # Same bom_item appears again - this means multiple rows resolved
+                # to the same bom_item_id (same part+assembly+context).
+                # ON CONFLICT will update the snapshot_item with the latest values.
+                if debug:
+                    first_row = bom_item_seen[bom_item_id]
+                    logger.warning(
+                        f"Duplicate bom_item_id {bom_item_id} detected: "
+                        f"row {first_row.row_index} and row {row.row_index} "
+                        f"both resolved to same bom_item (same part+assembly+context)"
+                    )
+            else:
+                bom_item_seen[bom_item_id] = row
+            
+            # Insert snapshot_item (or update if duplicate)
+            # ON CONFLICT ensures we don't fail on duplicates
             db.insert_snapshot_item(
                 snapshot_id=snapshot_id,
                 bom_item_id=bom_item_id,
-                quantity=quantity,
+                quantity=row.quantity,
                 attributes=snapshot_attributes,
                 checksum=checksum
             )

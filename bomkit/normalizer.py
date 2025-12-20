@@ -130,19 +130,24 @@ class BomNormalizer:
         return [self.normalize_row(row) for row in raw_rows]
     
     def normalize_reference_designator(self, ref_des: str) -> str:
-        """Normalize reference designator string to consistent format with ranges.
+        """Normalize reference designator string to comma-separated list format.
+        
+        Expands ranges to individual designators for more effective tracking.
+        Each reference designator is explicitly listed, making it easier to track
+        changes at the individual component level.
         
         Handles:
-        - Comma-separated lists: "R1, R2, R3" -> "R1-R3"
-        - Already formatted ranges: "R1-R3" -> "R1-R3" (unchanged)
-        - Mixed ranges and singles: "R1-R3, R5, R7-R9" -> "R1-R3, R5, R7-R9"
-        - Non-consecutive: "C1, C2, C4" -> "C1, C2, C4" or "C1-C2, C4"
+        - Ranges: "D1-D8" -> "D1, D2, D3, D4, D5, D6, D7, D8"
+        - Comma-separated lists: "R1, R2, R3" -> "R1, R2, R3" (unchanged)
+        - Mixed ranges and singles: "R1-R3, R5, R7-R9" -> "R1, R2, R3, R5, R7, R8, R9"
+        - Non-consecutive: "C1, C2, C4" -> "C1, C2, C4" (unchanged)
         
         Args:
             ref_des: Reference designator string (e.g., "R1, R2, R3" or "D1-D8")
             
         Returns:
-            Normalized reference designator string with consistent range formatting
+            Normalized reference designator string with all designators explicitly listed,
+            separated by commas (e.g., "D1, D2, D3, D4, D5, D6, D7, D8")
         """
         if not ref_des or not ref_des.strip():
             return ""
@@ -182,7 +187,7 @@ class BomNormalizer:
                         start_prefix, start_num = start_match.groups()
                         end_prefix, end_num = end_match.groups()
                         if start_prefix == end_prefix:
-                            # Expand the range
+                            # Expand the range to individual designators
                             for num in range(int(start_num), int(end_num) + 1):
                                 parseable_designators.append((start_prefix, num))
                         else:
@@ -206,7 +211,7 @@ class BomNormalizer:
         if not parseable_designators and not unparseable:
             return ref_des  # Return original if we can't parse anything
         
-        # Group by prefix and sort
+        # Group by prefix and sort to maintain consistent ordering
         grouped = {}
         
         for prefix, num in parseable_designators:
@@ -218,7 +223,7 @@ class BomNormalizer:
         for prefix in grouped:
             grouped[prefix].sort()
         
-        # Build normalized output
+        # Build normalized output - expand all to individual designators
         result_parts = []
         
         # Process each prefix group
@@ -227,31 +232,9 @@ class BomNormalizer:
             if not numbers:
                 continue
             
-            # Find consecutive ranges
-            ranges = []
-            start = numbers[0]
-            end = numbers[0]
-            
-            for i in range(1, len(numbers)):
-                if numbers[i] == end + 1:
-                    # Consecutive, extend range
-                    end = numbers[i]
-                else:
-                    # Gap found, save current range
-                    if start == end:
-                        ranges.append(f"{prefix}{start}")
-                    else:
-                        ranges.append(f"{prefix}{start}-{prefix}{end}")
-                    start = numbers[i]
-                    end = numbers[i]
-            
-            # Add final range
-            if start == end:
-                ranges.append(f"{prefix}{start}")
-            else:
-                ranges.append(f"{prefix}{start}-{prefix}{end}")
-            
-            result_parts.extend(ranges)
+            # Add all individual designators (no range compression)
+            for num in numbers:
+                result_parts.append(f"{prefix}{num}")
         
         # Add unparseable items
         result_parts.extend(unparseable)

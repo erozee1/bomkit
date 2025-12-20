@@ -7,7 +7,7 @@ from .snapshot_ingest import (
     normalize_row_from_dict
 )
 from .supabase_client import SupabaseClient
-from ..diff.snapshot_diff import (
+from ..diff import (
     diff_snapshots,
     DiffResult,
     SnapshotItemState,
@@ -27,4 +27,5 @@ __all__ = [
     "ModifiedItem",
     "FieldChange"
 ]
+
 

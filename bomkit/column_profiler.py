@@ -463,3 +463,5 @@ class ColumnProfiler:
         
         return sum(similarities) / len(similarities) if similarities else 0.0
 
+
+

@@ -1,0 +1,18 @@
+# bomkit - Bill of Materials Processing Toolkit
+# Requirements file for all dependencies
+
+# Excel file parsing and writing
+openpyxl>=3.0.0
+
+# Character encoding detection for CSV files
+chardet>=5.0.0
+
+# Unit conversion and normalization
+pint>=0.20.0
+
+# PostgreSQL database adapter for Supabase integration
+psycopg2-binary>=2.9.0
+
+# Environment variable loading from .env files (for development/testing)
+python-dotenv>=1.0.0
+

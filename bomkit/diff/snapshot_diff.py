@@ -19,8 +19,10 @@ CORE PRINCIPLES:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 from uuid import UUID
+import json
+import hashlib
 
 from ..ingest.snapshot_ingest import DatabaseClient, NON_SEMANTIC_ATTRIBUTE_KEYS, _filter_semantic_attributes
 
@@ -37,6 +39,7 @@ class SnapshotItemState:
     quantity: Optional[Union[int, float]]  # Can be int, float, or Decimal from DB
     attributes: Dict[str, Any]
     checksum: str
+    part_id: Optional[UUID] = None  # Part ID for semantic matching
 
 
 @dataclass
@@ -82,9 +85,54 @@ class DiffResult:
     unchanged_count: int  # bom_item_ids that are identical in both
 
 
+def _create_semantic_key(part_id: Optional[UUID], quantity: Optional[Union[int, float]], attributes: Dict[str, Any]) -> str:
+    """
+    Create a semantic key for matching items across snapshots.
+    
+    Uses part_id + quantity + semantic attributes to identify the same logical item
+    even if it has a different bom_item_id.
+    
+    Args:
+        part_id: Part ID (None if not available)
+        quantity: Quantity
+        attributes: Attributes dict (will be filtered to semantic only)
+        
+    Returns:
+        String key for semantic matching
+    """
+    # Filter to semantic attributes only
+    semantic_attrs = _filter_semantic_attributes(attributes)
+    
+    # Create a stable representation
+    key_parts = [
+        str(part_id) if part_id else "NO_PART",
+        str(quantity) if quantity is not None else "NO_QTY",
+        json.dumps(semantic_attrs, sort_keys=True) if semantic_attrs else "{}"
+    ]
+    
+    # Hash for consistent key format
+    key_str = "|".join(key_parts)
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def _create_part_based_key(part_id: Optional[UUID]) -> str:
+    """
+    Create a key based only on part_id for matching items that represent the same part
+    but may have different quantities or attributes (these should be modified, not removed+added).
+    
+    Args:
+        part_id: Part ID (None if not available)
+        
+    Returns:
+        String key for part-based matching
+    """
+    return str(part_id) if part_id else "NO_PART"
+
+
 def fetch_snapshot_state(
     db: DatabaseClient,
-    snapshot_id: UUID
+    snapshot_id: UUID,
+    bom_item_details: Optional[Dict[UUID, Dict[str, Any]]] = None
 ) -> Dict[UUID, SnapshotItemState]:
     """
     Fetch all snapshot items for a snapshot and represent as identity-keyed dict.
@@ -98,15 +146,30 @@ def fetch_snapshot_state(
     Args:
         db: Database client
         snapshot_id: Snapshot ID to fetch
+        bom_item_details: Optional pre-fetched bom_item details dict (for performance)
         
     Returns:
         Dictionary mapping bom_item_id -> SnapshotItemState
     """
     snapshot_items = db.get_snapshot_items(snapshot_id)
     
+    # If bom_item_details not provided, fetch them
+    if bom_item_details is None:
+        bom_item_ids = [UUID(item['bom_item_id']) for item in snapshot_items]
+        if bom_item_ids:
+            bom_item_details = db.get_bom_item_details(bom_item_ids)
+        else:
+            bom_item_details = {}
+    
     state = {}
     for item in snapshot_items:
         bom_item_id = UUID(item['bom_item_id'])
+        
+        # Get part_id from bom_item_details
+        details = bom_item_details.get(bom_item_id, {})
+        part_id = details.get('part_id')
+        if part_id:
+            part_id = UUID(part_id) if isinstance(part_id, str) else part_id
         
         # Handle quantity conversion (DB may return numeric as Decimal, int, or float)
         quantity = item['quantity']
@@ -122,7 +185,8 @@ def fetch_snapshot_state(
             bom_item_id=bom_item_id,
             quantity=quantity,
             attributes=item['attributes'] or {},
-            checksum=item['checksum']
+            checksum=item['checksum'],
+            part_id=part_id
         )
     
     return state
@@ -200,51 +264,6 @@ def diff_snapshot_item(
     return changes
 
 
-def _get_part_attributes_for_snapshots(
-    db: DatabaseClient,
-    snapshot_a_id: UUID,
-    snapshot_b_id: UUID
-) -> Dict[UUID, Dict[str, Any]]:
-    """
-    Get part attributes for all bom_items in both snapshots.
-    
-    Returns a dict: {bom_item_id: part_attributes}
-    This allows detecting part-level changes (like footprint) that might
-    not be reflected in snapshot_items if part matching incorrectly reused a part.
-    
-    NOTE: In a correct system, parts don't change - if attributes change,
-    a new part is created. But we check this to catch cases where part
-    matching was too loose and incorrectly reused a part.
-    
-    Args:
-        db: Database client
-        snapshot_a_id: First snapshot ID
-        snapshot_b_id: Second snapshot ID
-        
-    Returns:
-        Dictionary mapping bom_item_id -> part_attributes dict
-    """
-    # Get all bom_item_ids from both snapshots
-    state_a = fetch_snapshot_state(db, snapshot_a_id)
-    state_b = fetch_snapshot_state(db, snapshot_b_id)
-    all_bom_item_ids = list(set(state_a.keys()) | set(state_b.keys()))
-    
-    if not all_bom_item_ids:
-        return {}
-    
-    # Get bom_item details (which includes part_attributes)
-    bom_item_details = db.get_bom_item_details(all_bom_item_ids)
-    
-    # Extract part attributes for each bom_item
-    result = {}
-    for bom_item_id in all_bom_item_ids:
-        details = bom_item_details.get(bom_item_id, {})
-        part_attrs = details.get('part_attributes', {})
-        result[bom_item_id] = part_attrs
-    
-    return result
-
-
 def diff_snapshots(
     snapshot_a_id: UUID,
     snapshot_b_id: UUID,
@@ -253,19 +272,15 @@ def diff_snapshots(
     """
     Compare two BOM snapshots and produce a structured diff result.
     
-    This implements the identity-first, checksum-based diff engine:
-    1. Fetch snapshot states (SQL)
-    2. Represent as identity-keyed dicts
-    3. Structural diff (set operations)
-    4. Cheap change detection (checksum comparison)
-    5. Semantic diff (field-level for changed items)
-    6. Structured result
+    This implements a semantic diff engine that:
+    1. Fetches snapshot states with part information
+    2. Creates semantic keys (part_id + quantity + semantic attributes)
+    3. Matches items by semantic key (not just bom_item_id)
+    4. Detects changes via checksum comparison
+    5. Performs field-level diffs for changed items
     
-    This approach is inspired by Git's object-based diffing:
-    - Identity is stable (bom_item_id)
-    - Change detection is cheap (checksum comparison)
-    - Semantic diff is domain-aware (field-level)
-    - Result is explainable (structured change events)
+    This approach ensures that items with the same part and attributes
+    are recognized as the same item even if they have different bom_item_ids.
     
     Args:
         snapshot_a_id: First snapshot ID (baseline)
@@ -275,78 +290,178 @@ def diff_snapshots(
     Returns:
         DiffResult with added, removed, modified items and unchanged count
     """
-    # Step 1 & 2: Fetch and represent snapshots
-    state_a = fetch_snapshot_state(db, snapshot_a_id)
-    state_b = fetch_snapshot_state(db, snapshot_b_id)
+    # Step 1: Fetch snapshot items and get all bom_item_ids
+    snapshot_items_a = db.get_snapshot_items(snapshot_a_id)
+    snapshot_items_b = db.get_snapshot_items(snapshot_b_id)
     
-    # Step 3: Structural diff (identity-based set operations)
-    # This replaces all generic diff algorithms.
-    # 
-    # CRITICAL: We use set operations on bom_item_id, not row position.
-    # This ensures:
-    # - Row reordering doesn't cause false positives
-    # - Identity is stable across uploads
-    # - Only true add/remove operations are detected
-    added_ids = set(state_b.keys()) - set(state_a.keys())
-    removed_ids = set(state_a.keys()) - set(state_b.keys())
-    common_ids = set(state_a.keys()) & set(state_b.keys())
+    all_bom_item_ids = set()
+    for item in snapshot_items_a:
+        all_bom_item_ids.add(UUID(item['bom_item_id']))
+    for item in snapshot_items_b:
+        all_bom_item_ids.add(UUID(item['bom_item_id']))
     
-    # Step 4: Cheap change detection (checksum comparison)
-    # This mirrors Git's object hash comparison.
-    # 
-    # CRITICAL: Checksums are computed on SEMANTIC attributes only.
-    # Non-semantic keys (row_index, normalization artifacts) are excluded.
-    # This ensures:
-    # - Row reordering doesn't cause false positives
-    # - Only meaningful engineering changes are detected
-    # - Checksums remain stable across uploads if nothing changed
-    modified_ids = {
-        bom_item_id for bom_item_id in common_ids
-        if state_a[bom_item_id].checksum != state_b[bom_item_id].checksum
-    }
+    # Step 2: Fetch bom_item_details for all items at once (performance optimization)
+    bom_item_details = {}
+    if all_bom_item_ids:
+        bom_item_details = db.get_bom_item_details(list(all_bom_item_ids))
     
-    # Step 5: Semantic diff (domain-aware field-level comparison)
-    # Only for items that actually changed
-    # 
-    # CRITICAL: We also check part-level attributes to catch cases where
-    # part matching was too loose and incorrectly reused a part when
-    # design-intent attributes (like footprint) changed.
+    # Step 3: Fetch snapshot states with part information
+    state_a = fetch_snapshot_state(db, snapshot_a_id, bom_item_details)
+    state_b = fetch_snapshot_state(db, snapshot_b_id, bom_item_details)
+    
+    # Step 4: Create semantic keys for all items
+    # Map semantic_key -> list of (bom_item_id, state) tuples
+    semantic_map_a: Dict[str, List[Tuple[UUID, SnapshotItemState]]] = {}
+    semantic_map_b: Dict[str, List[Tuple[UUID, SnapshotItemState]]] = {}
+    
+    # Also create part-based maps for matching items with same part_id but different quantities/attributes
+    part_map_a: Dict[str, List[Tuple[UUID, SnapshotItemState]]] = {}
+    part_map_b: Dict[str, List[Tuple[UUID, SnapshotItemState]]] = {}
+    
+    for bom_item_id, state in state_a.items():
+        semantic_key = _create_semantic_key(state.part_id, state.quantity, state.attributes)
+        if semantic_key not in semantic_map_a:
+            semantic_map_a[semantic_key] = []
+        semantic_map_a[semantic_key].append((bom_item_id, state))
+        
+        # Also index by part_id for part-based matching
+        part_key = _create_part_based_key(state.part_id)
+        if part_key not in part_map_a:
+            part_map_a[part_key] = []
+        part_map_a[part_key].append((bom_item_id, state))
+    
+    for bom_item_id, state in state_b.items():
+        semantic_key = _create_semantic_key(state.part_id, state.quantity, state.attributes)
+        if semantic_key not in semantic_map_b:
+            semantic_map_b[semantic_key] = []
+        semantic_map_b[semantic_key].append((bom_item_id, state))
+        
+        # Also index by part_id for part-based matching
+        part_key = _create_part_based_key(state.part_id)
+        if part_key not in part_map_b:
+            part_map_b[part_key] = []
+        part_map_b[part_key].append((bom_item_id, state))
+    
+    # Step 5: Match items by semantic key
+    # Track which items have been matched
+    matched_a = set()
+    matched_b = set()
+    matched_pairs: List[Tuple[UUID, UUID]] = []  # (bom_item_id_a, bom_item_id_b)
+    
+    # First, try exact bom_item_id matches (fast path)
+    # Items with same bom_item_id are matched regardless of checksum
+    # (they'll be classified as modified or unchanged later based on checksum)
+    common_bom_item_ids = set(state_a.keys()) & set(state_b.keys())
+    for bom_item_id in common_bom_item_ids:
+        matched_a.add(bom_item_id)
+        matched_b.add(bom_item_id)
+        matched_pairs.append((bom_item_id, bom_item_id))
+    
+    # Then, match by semantic key for unmatched items (exact matches: part_id + quantity + attributes)
+    # Items with same semantic key should be matched even if they have different bom_item_ids
+    for semantic_key in set(semantic_map_a.keys()) | set(semantic_map_b.keys()):
+        items_a = semantic_map_a.get(semantic_key, [])
+        items_b = semantic_map_b.get(semantic_key, [])
+        
+        # Filter out already matched items
+        items_a_unmatched = [(bid, s) for bid, s in items_a if bid not in matched_a]
+        items_b_unmatched = [(bid, s) for bid, s in items_b if bid not in matched_b]
+        
+        # Match items with same semantic key
+        # Match all items with same semantic key, preferring checksum matches
+        # but still matching even if checksums differ (they'll be marked as modified)
+        while items_a_unmatched and items_b_unmatched:
+            # Find best match: prefer exact checksum match, then any match
+            best_match_idx_a = None
+            best_match_idx_b = None
+            best_is_exact = False
+            
+            for idx_a, (bid_a, state_a_item) in enumerate(items_a_unmatched):
+                for idx_b, (bid_b, state_b_item) in enumerate(items_b_unmatched):
+                    is_exact = state_a_item.checksum == state_b_item.checksum
+                    
+                    # Prefer exact checksum match
+                    if is_exact and not best_is_exact:
+                        best_match_idx_a = idx_a
+                        best_match_idx_b = idx_b
+                        best_is_exact = True
+                    elif best_match_idx_a is None:
+                        # Keep first potential match as fallback
+                        best_match_idx_a = idx_a
+                        best_match_idx_b = idx_b
+                        best_is_exact = False
+            
+            if best_match_idx_a is not None and best_match_idx_b is not None:
+                bom_item_id_a, state_a_item = items_a_unmatched[best_match_idx_a]
+                bom_item_id_b, state_b_item = items_b_unmatched[best_match_idx_b]
+                
+                matched_a.add(bom_item_id_a)
+                matched_b.add(bom_item_id_b)
+                matched_pairs.append((bom_item_id_a, bom_item_id_b))
+                
+                # Remove matched items from lists
+                items_a_unmatched.pop(best_match_idx_a)
+                # Adjust index if we removed an item before the second one
+                if best_match_idx_b > best_match_idx_a:
+                    best_match_idx_b -= 1
+                items_b_unmatched.pop(best_match_idx_b)
+            else:
+                # No more matches possible
+                break
+    
+    # Finally, match by part_id only for remaining unmatched items
+    # Items with same part_id but different quantities/attributes should be matched as modified
+    # This handles cases where quantity or attributes changed but it's the same part
+    for part_key in set(part_map_a.keys()) | set(part_map_b.keys()):
+        items_a = part_map_a.get(part_key, [])
+        items_b = part_map_b.get(part_key, [])
+        
+        # Filter out already matched items
+        items_a_unmatched = [(bid, s) for bid, s in items_a if bid not in matched_a]
+        items_b_unmatched = [(bid, s) for bid, s in items_b if bid not in matched_b]
+        
+        # Match items with same part_id (even if quantity/attributes differ)
+        # This ensures items with same part are marked as modified, not removed+added
+        while items_a_unmatched and items_b_unmatched:
+            # Match first available pair (they'll be marked as modified if checksums differ)
+            bom_item_id_a, state_a_item = items_a_unmatched[0]
+            bom_item_id_b, state_b_item = items_b_unmatched[0]
+            
+            matched_a.add(bom_item_id_a)
+            matched_b.add(bom_item_id_b)
+            matched_pairs.append((bom_item_id_a, bom_item_id_b))
+            
+            # Remove matched items
+            items_a_unmatched.pop(0)
+            items_b_unmatched.pop(0)
+    
+    # Step 6: Classify items
+    # Only items that couldn't be matched at all are truly added/removed
+    added_ids = set(state_b.keys()) - matched_b
+    removed_ids = set(state_a.keys()) - matched_a
+    
+    # Step 7: Find modified items (matched but checksum differs)
+    # This includes both bom_item_id matches and semantic matches
     modified_items = []
+    for bom_item_id_a, bom_item_id_b in matched_pairs:
+        state_a_item = state_a[bom_item_id_a]
+        state_b_item = state_b[bom_item_id_b]
+        
+        if state_a_item.checksum != state_b_item.checksum:
+            changes = diff_snapshot_item(state_a_item, state_b_item)
+            if changes:
+                # Use bom_item_id from snapshot B (the newer one)
+                modified_items.append(ModifiedItem(
+                    bom_item_id=bom_item_id_b,
+                    changes=changes
+                ))
     
-    # Get part attributes for all bom_items
-    # NOTE: In a correct system, parts are immutable - if attributes change,
-    # a new part is created. However, we get part attributes here for reference
-    # in case we need to display them in the diff output.
-    # We don't compare part attributes across snapshots because parts shouldn't change.
-    # If a footprint changes, it should create a NEW part (and thus new bom_item),
-    # which would show up as removed+added, not modified.
-    part_attrs_by_bom_item = _get_part_attributes_for_snapshots(
-        db, snapshot_a_id, snapshot_b_id
+    # Step 8: Calculate unchanged count
+    # Only items with matching checksums are truly unchanged
+    unchanged_count = sum(
+        1 for bom_item_id_a, bom_item_id_b in matched_pairs
+        if state_a[bom_item_id_a].checksum == state_b[bom_item_id_b].checksum
     )
-    
-    for bom_item_id in modified_ids:
-        changes = diff_snapshot_item(
-            state_a[bom_item_id],
-            state_b[bom_item_id]
-        )
-        
-        # NOTE: We do NOT check part attributes here because:
-        # 1. Parts are immutable - if attributes change, a new part is created
-        # 2. If part matching incorrectly reused a part when footprint changed,
-        #    that's a part matching bug, not a diff bug
-        # 3. The diff engine's job is to compare snapshot_items, not parts
-        # 
-        # If footprint changes are being missed, the issue is in part matching
-        # (similarity threshold too high), not in the diff engine.
-        
-        if changes:  # Only include if there are actual changes
-            modified_items.append(ModifiedItem(
-                bom_item_id=bom_item_id,
-                changes=changes
-            ))
-    
-    # Step 6: Calculate unchanged count
-    unchanged_count = len(common_ids) - len(modified_ids)
     
     # Return structured result
     return DiffResult(

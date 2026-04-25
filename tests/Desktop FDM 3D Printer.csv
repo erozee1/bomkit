@@ -1,0 +1,16 @@
+Table 1
+Assembly Part Number,PRN-1000,,,,,,,,,,,
+Assembly Description,Desktop FDM 3D Printer,,,,,,,,,,,
+Assembly Revision,A,,,,,,,,,,,
+,,,,,,,,,,,,
+Item No,Part Number,Description,Revision,Quantity,UoM,Material,Make/Buy,Approved Supplier,Unit Cost GBP,Extended Cost GBP,Lead Time Weeks,Lifecycle Status
+1,FRM-ALU-2040,Aluminium Extrusion Frame 2040 (500mm),B,4,EA,6063-T5 Aluminium,Buy,MISUMI UK,12.50,50.00,2,Active
+2,BED-HT-220,Heated Print Bed 220x220mm,A,1,EA,FR4 + Copper,Buy,E3D Online,28.00,28.00,3,Active
+3,XAX-LIN-12,Linear Guide Rail 12mm (X-axis),C,2,EA,Hardened Steel,Buy,Hiwin UK,22.00,44.00,4,Active
+4,YAX-LIN-12,Linear Guide Rail 12mm (Y-axis),C,2,EA,Hardened Steel,Buy,Hiwin UK,22.00,44.00,4,Active
+5,MOT-NEMA17,Stepper Motor NEMA 17 1.8 Degree,A,4,EA,Steel / Copper,Buy,OMC Stepper,14.00,56.00,3,Active
+6,EXT-DRV-DIR,Direct Drive Extruder Assembly,A,1,EA,Aluminium / Steel,Buy,E3D Online,65.00,65.00,2,Active
+7,PSU-24V-350W,24V 350W Switching Power Supply,B,1,EA,Electronic Assembly,Buy,Mean Well,32.00,32.00,3,Active
+8,PCB-CTRL-STM,Main Control Board STM32 Based,A,1,EA,FR4 PCB,Buy,BigTreeTech,45.00,45.00,5,Active
+9,LCD-TCH-43,4.3 Inch Touchscreen Display,A,1,EA,TFT LCD,Buy,BigTreeTech,38.00,38.00,4,Active
+10,FAST-M6-SS,Stainless Steel Fastener Kit M6,A,1,KIT,A2 Stainless Steel,Buy,Accu.co.uk,18.00,18.00,1,Active

@@ -9,6 +9,7 @@ STANDARD_HEADERS = [
     "quantity",
     "unit",
     "manufacturer",
+    "supplier",
     "manufacturer_part_number",
     "reference_designator",
     "value",
@@ -39,10 +40,15 @@ COLUMN_MAPPINGS = {
         "uom", "units", "measure", "measurement"
     ],
     "manufacturer": [
-        "manufacturer", "mfg", "mfg.", "vendor", "supplier",
+        "manufacturer", "mfg", "mfg.",
         "manufacturer name", "manufacturer_name", "manufacturername",
-        "vendor name", "vendor_name", "vendorname", "supplier name",
-        "supplier_name", "suppliername"
+        "manufacturer company", "mfr", "mfr.", "brand", "maker"
+    ],
+    "supplier": [
+        "supplier", "vendor", "distributor", "approved supplier", "preferred supplier",
+        "supplier name", "supplier_name", "suppliername",
+        "vendor name", "vendor_name", "vendorname",
+        "distributor name", "distributor_name", "source", "sourcing"
     ],
     "manufacturer_part_number": [
         "manufacturer part number", "manufacturer_part_number",
@@ -165,10 +171,9 @@ CANONICAL_FIELDS: List[Dict[str, Any]] = [
         "id": "manufacturer",
         "label": "Manufacturer",
         "aliases": [
-            "manufacturer", "mfg", "mfg.", "vendor", "supplier",
+            "manufacturer", "mfg", "mfg.",
             "manufacturer name", "manufacturer_name", "manufacturername",
-            "vendor name", "vendor_name", "vendorname", "supplier name",
-            "supplier_name", "suppliername"
+            "manufacturer company", "mfr", "mfr.", "brand", "maker"
         ],
         "expected": {
             "kind": "string",
@@ -181,7 +186,29 @@ CANONICAL_FIELDS: List[Dict[str, Any]] = [
             "Murata",
             "Panasonic"
         ],
-        "description": "The name of the component manufacturer or vendor. This is the company that produces the part, not the distributor."
+        "description": "The name of the component manufacturer. This is the company that produces the part, not the distributor or supplier."
+    },
+    {
+        "id": "supplier",
+        "label": "Supplier",
+        "aliases": [
+            "supplier", "vendor", "distributor", "approved supplier", "preferred supplier",
+            "supplier name", "supplier_name", "suppliername",
+            "vendor name", "vendor_name", "vendorname",
+            "distributor name", "distributor_name", "source", "sourcing"
+        ],
+        "expected": {
+            "kind": "string",
+            "patterns": ["^[A-Za-z0-9][A-Za-z0-9\\s\\-\\._&]{0,127}$"]
+        },
+        "examples": [
+            "Digi-Key",
+            "Mouser",
+            "Arrow",
+            "Avnet",
+            "MISUMI UK"
+        ],
+        "description": "The supplier or distributor for the part. This is the company you buy the part from, not necessarily the manufacturer."
     },
     {
         "id": "manufacturer_part_number",

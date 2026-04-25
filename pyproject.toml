@@ -10,13 +10,21 @@ dependencies = [
     "openpyxl",
     "chardet",
     "pint",
-    "psycopg2-binary"
+    "psycopg2-binary",
+    "requests"
 ]
+
+[project.optional-dependencies]
+mcp = ["mcp"]
 
 [project.scripts]
 bomkit = "bomkit.cli:main"
+teamcenter-mcp = "bomkit.mcp.teamcenter_server:main"
 
 [project.urls]
 "Homepage" = "https://github.com/erozee1/bomkit"
-"Documentation" = "coming soon"
+"Documentation" = "https://github.com/erozee1/bomkit#readme"
 "Bug Tracker" = "https://github.com/erozee1/bomkit/issues"
+
+[tool.setuptools.packages.find]
+include = ["bomkit*"]

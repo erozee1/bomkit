@@ -57,6 +57,7 @@ class ChangeEventType(Enum):
     # Identity/source changes
     PART_SUBSTITUTED = auto()      # Different part source (manufacturer + MPN changed)
     MANUFACTURER_CHANGED = auto()  # Same MPN, different manufacturer
+    SUPPLIER_CHANGED = auto()      # Supplier/distributor changed
     
     # Quantity changes
     QUANTITY_CHANGED = auto()      # Quantity increased or decreased
@@ -128,6 +129,7 @@ class ItemDelta:
     # Field change flags (computed from FieldChange list)
     quantity_changed: bool = False
     manufacturer_changed: bool = False
+    supplier_changed: bool = False
     mpn_changed: bool = False
     reference_designator_changed: bool = False
     
@@ -149,6 +151,7 @@ class ItemDelta:
             self.removed or
             self.quantity_changed or
             self.manufacturer_changed or
+            self.supplier_changed or
             self.mpn_changed or
             self.reference_designator_changed or
             len(self.changed_attributes) > 0
@@ -293,10 +296,18 @@ SPEC_ATTRIBUTE_KEYS = {
 MANUFACTURER_KEYS = {
     "manufacturer",
     "mfr",
-    "vendor",
     "brand",
+    "maker",
 }
 
+# Supplier/distributor keys
+SUPPLIER_KEYS = {
+    "supplier",
+    "vendor",
+    "distributor",
+    "approved supplier",
+    "preferred supplier",
+}
 # MPN-related attribute keys
 MPN_KEYS = {
     "manufacturer_part_number",
@@ -352,6 +363,10 @@ def _compute_item_delta_from_modified(modified: ModifiedItem) -> ItemDelta:
                 # Check for manufacturer change (after MPN to avoid false matches)
                 elif field_lower in MANUFACTURER_KEYS or any(k in field_lower for k in MANUFACTURER_KEYS):
                     delta.manufacturer_changed = True
+
+                # Check for supplier change
+                elif field_lower in SUPPLIER_KEYS or any(k in field_lower for k in SUPPLIER_KEYS):
+                    delta.supplier_changed = True
                 
                 # Check for reference designator change
                 elif field_lower in REFDES_KEYS or any(k in field_lower for k in REFDES_KEYS):
@@ -502,6 +517,29 @@ def _classify_manufacturer_changed(delta: ItemDelta) -> Optional[ChangeEvent]:
     )
 
 
+def _classify_supplier_changed(delta: ItemDelta) -> Optional[ChangeEvent]:
+    """
+    Rule: Supplier/distributor changed.
+
+    This affects procurement/sourcing but does not imply a part substitution.
+
+    Produces: SUPPLIER_CHANGED (LOW severity)
+    """
+    if not delta.supplier_changed:
+        return None
+
+    return ChangeEvent(
+        bom_item_id=delta.bom_item_id,
+        part_id=delta.part_id,
+        event_type=ChangeEventType.SUPPLIER_CHANGED,
+        severity=Severity.LOW,
+        affected_domains=[Domain.PROCUREMENT],
+        evidence=delta.field_changes,
+        summary="Supplier changed",
+        delta=delta
+    )
+
+
 def _classify_quantity_changed(delta: ItemDelta) -> Optional[ChangeEvent]:
     """
     Rule: Quantity changed.
@@ -636,6 +674,7 @@ CLASSIFICATION_RULES = [
     _classify_removed,
     _classify_substituted,
     _classify_manufacturer_changed,
+    _classify_supplier_changed,
     _classify_quantity_changed,
     _classify_refdes_changed,
     _classify_spec_attribute_changed,
@@ -807,4 +846,3 @@ def get_procurement_events(diff_result: DiffResult) -> List[ChangeEvent]:
     """
     result = classify_diff(diff_result)
     return result.events_by_domain(Domain.PROCUREMENT)
-

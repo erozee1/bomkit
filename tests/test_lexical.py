@@ -77,6 +77,7 @@ def test_lexical_similarity():
         "quantity",
         "manufacturer_part_number",
         "manufacturer",
+        "supplier",
     ]
     for col in test_columns:
         should_use = should_use_lexical_similarity(col)
@@ -86,4 +87,3 @@ def test_lexical_similarity():
 
 if __name__ == "__main__":
     test_lexical_similarity()
-

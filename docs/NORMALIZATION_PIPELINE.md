@@ -186,11 +186,12 @@ All normalized BOMs use this standard column order:
 3. `quantity` - Number of units required
 4. `unit` - Unit of measure (pcs, pieces, ea, each)
 5. `manufacturer` - Manufacturer name
-6. `manufacturer_part_number` - Manufacturer's part number
-7. `reference_designator` - Schematic reference (e.g., "R1-R3")
-8. `value` - Electrical value or specification
-9. `package` - Package type/footprint
-10. `notes` - Additional information
+6. `supplier` - Supplier/distributor (procurement source)
+7. `manufacturer_part_number` - Manufacturer's part number
+8. `reference_designator` - Schematic reference (e.g., "R1-R3")
+9. `value` - Electrical value or specification
+10. `package` - Package type/footprint
+11. `notes` - Additional information
 
 ## Performance Considerations
 
@@ -232,4 +233,3 @@ BomParser
 ```
 
 This architecture ensures that even the messiest BOM files can be transformed into perfectly normalized, standardized documents ready for downstream processing.
-

@@ -145,6 +145,19 @@ class TestItemDeltaComputation:
         assert delta.manufacturer_changed is True
         assert delta.mpn_changed is False
         assert len(delta.field_changes) == 1
+
+    def test_delta_supplier_changed(self):
+        """Supplier attribute change should set supplier_changed=True."""
+        modified = make_modified_item(changes=[
+            make_field_change("ATTRIBUTE_CHANGED", field="supplier",
+                            from_value="Digi-Key", to_value="Mouser")
+        ])
+
+        delta = _compute_item_delta_from_modified(modified)
+
+        assert delta.supplier_changed is True
+        assert delta.manufacturer_changed is False
+        assert delta.mpn_changed is False
     
     def test_delta_mpn_changed(self):
         """MPN attribute change should set mpn_changed=True."""
@@ -286,6 +299,25 @@ class TestClassificationRules:
         event = result.events[0]
         assert event.event_type == ChangeEventType.MANUFACTURER_CHANGED
         assert event.severity == Severity.MEDIUM
+
+    def test_classify_supplier_changed_only(self, snapshot_a_id, snapshot_b_id):
+        """Supplier change should classify as SUPPLIER_CHANGED."""
+        modified = make_modified_item(changes=[
+            make_field_change("ATTRIBUTE_CHANGED", field="supplier",
+                            from_value="Digi-Key", to_value="Mouser")
+        ])
+        diff = make_diff_result(
+            snapshot_a_id, snapshot_b_id,
+            modified_items=[modified]
+        )
+
+        result = classify_diff(diff)
+
+        assert len(result.events) == 1
+        event = result.events[0]
+        assert event.event_type == ChangeEventType.SUPPLIER_CHANGED
+        assert event.severity == Severity.LOW
+        assert Domain.PROCUREMENT in event.affected_domains
     
     def test_classify_quantity_changed(self, snapshot_a_id, snapshot_b_id):
         """Quantity change should classify as QUANTITY_CHANGED."""
@@ -703,4 +735,3 @@ class TestSerialization:
         assert "snapshot_b_id" in result_dict
         assert result_dict["total_changes"] == 1
         assert len(result_dict["events"]) == 1
-

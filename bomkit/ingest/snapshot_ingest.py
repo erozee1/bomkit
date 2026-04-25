@@ -80,7 +80,7 @@ def normalize_row_from_dict(
     - part_name: from "part_number" or "description"
     - quantity: from "quantity" (converted to int)
     - attributes: value, tolerance, material, package, manufacturer, etc.
-    - context: reference_designator, notes, placement info
+    - context: reference_designator, notes, placement info, supplier
     
     Args:
         row_dict: Dictionary with standard column names from BomNormalizer
@@ -120,6 +120,12 @@ def normalize_row_from_dict(
         attributes["description"] = row_dict["description"]
     if row_dict.get("unit"):
         attributes["unit"] = row_dict["unit"]
+    if row_dict.get("supplier"):
+        # Supplier is usage/procurement context; keep in context (snapshot-level)
+        # rather than part identity attributes.
+        context_supplier = row_dict["supplier"]
+    else:
+        context_supplier = None
     
     # Extract tolerance from notes if present (common pattern)
     notes = row_dict.get("notes", "")
@@ -137,6 +143,8 @@ def normalize_row_from_dict(
         context["reference_designator"] = row_dict["reference_designator"]
     if row_dict.get("notes"):
         context["notes"] = row_dict["notes"]
+    if context_supplier:
+        context["supplier"] = context_supplier
     
     return NormalizedRow(
         part_name=part_name,
@@ -615,6 +623,7 @@ def _extract_snapshot_attributes(row: NormalizedRow) -> Dict[str, Any]:
     
     Includes:
     - reference_designator (semantic - changes show as attribute updates)
+    - supplier (semantic - procurement source)
     - row_index (non-semantic - filtered from checksums/diffs)
     - Other snapshot-specific metadata
     
@@ -633,6 +642,9 @@ def _extract_snapshot_attributes(row: NormalizedRow) -> Dict[str, Any]:
     # - Identity remains stable even when refdes changes
     if row.context.get("reference_designator"):
         attributes["reference_designator"] = row.context["reference_designator"]
+
+    if row.context.get("supplier"):
+        attributes["supplier"] = row.context["supplier"]
     
     # Row index for debugging/traceability
     # NOTE: This is NON-SEMANTIC and will be filtered from checksums/diffs
@@ -1039,4 +1051,3 @@ def ingest_bom_snapshot(
         db.rollback_transaction()
         logger.error(f"BOM snapshot ingestion failed: {e}", exc_info=True)
         raise
-
